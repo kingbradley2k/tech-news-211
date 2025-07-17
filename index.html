@@ -622,6 +622,16 @@
                     this.handleSubscription();
                 });
 
+                // Infinite scroll
+                window.addEventListener('scroll', () => {
+                    if (this.loading) return;
+                    
+                    const { scrollTop, scrollHeight, clientHeight } = document.documentElement;
+                    if (scrollTop + clientHeight >= scrollHeight - 100) {
+                        this.loadNews(true);
+                    }
+                });
+
                 // Trending dropdown
                 const trendingLink = document.getElementById('trendingLink');
                 const trendingDropdown = document.getElementById('trendingDropdown');
@@ -651,37 +661,154 @@
                 this.renderNews();
             }
 
-            async loadNews() {
-                document.getElementById('loading').style.display = 'block';
+            constructor() {
+                this.newsData = [];
+                this.currentFilter = 'all';
+                this.subscribers = 0;
+                this.page = 1;
+                this.loading = false;
+                this.apiKeys = {
+                    newsapi: 'YOUR_NEWSAPI_KEY_HERE',
+                    reddit: 'YOUR_REDDIT_CLIENT_ID',
+                    github: 'YOUR_GITHUB_TOKEN'
+                };
+                this.cache = {
+                    newsapi: new Map(),
+                    reddit: new Map(),
+                    github: new Map()
+                };
+                this.cacheExpiry = 5 * 60 * 1000; // 5 minutes
+                this.rateLimits = {
+                    newsapi: { requests: 0, lastReset: Date.now() },
+                    reddit: { requests: 0, lastReset: Date.now() },
+                    github: { requests: 0, lastReset: Date.now() }
+                };
+                this.init();
+            }
+
+            async loadNews(loadMore = false) {
+                if (this.loading) return;
+                
+                if (!loadMore) {
+                    document.getElementById('loading').style.display = 'block';
+                    this.page = 1;
+                } else {
+                    this.page++;
+                }
+                
+                this.loading = true;
                 
                 try {
-                    // Load news from multiple sources
+                    // Try to load from cache first
+                    const cachedData = this.loadFromCache();
+                    if (cachedData && !loadMore) {
+                        this.newsData = cachedData;
+                        this.renderNews();
+                        this.renderTrending();
+                        console.log('Loaded from cache');
+                    }
+                    
+                    // Load news from multiple sources with retry logic
                     const [newsApiData, redditData, githubData] = await Promise.all([
-                        this.fetchNewsAPI(),
-                        this.fetchRedditNews(),
-                        this.fetchGithubTrending()
+                        this.fetchWithRetry(() => this.fetchNewsAPI(), 'newsapi'),
+                        this.fetchWithRetry(() => this.fetchRedditNews(), 'reddit'),
+                        this.fetchWithRetry(() => this.fetchGithubTrending(), 'github')
                     ]);
                     
-                    this.newsData = [
-                        ...newsApiData,
-                        ...redditData,
-                        ...githubData
-                    ];
+                    if (loadMore) {
+                        this.newsData = [
+                            ...this.newsData,
+                            ...newsApiData,
+                            ...redditData,
+                            ...githubData
+                        ];
+                    } else {
+                        this.newsData = [
+                            ...newsApiData,
+                            ...redditData,
+                            ...githubData
+                        ];
+                    }
                     
                     // Sort by publication date
                     this.newsData.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
                     
+                    // Cache the results
+                    this.saveToCache(this.newsData);
+                    
                 } catch (error) {
                     console.error('Error loading news:', error);
-                    // Fallback to sample data if API fails
-                    this.loadSampleData();
+                    if (!this.newsData.length) {
+                        this.loadSampleData();
+                    }
+                } finally {
+                    this.loading = false;
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('newsGrid').style.display = 'grid';
                 }
-                
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('newsGrid').style.display = 'grid';
                 
                 this.renderNews();
                 this.renderTrending();
+            }
+
+            // Cache management
+            loadFromCache() {
+                try {
+                    const cached = localStorage.getItem('techNewsCache');
+                    if (cached) {
+                        const { data, timestamp } = JSON.parse(cached);
+                        if (Date.now() - timestamp < this.cacheExpiry) {
+                            return data;
+                        }
+                    }
+                } catch (error) {
+                    console.error('Cache loading error:', error);
+                }
+                return null;
+            }
+
+            saveToCache(data) {
+                try {
+                    localStorage.setItem('techNewsCache', JSON.stringify({
+                        data,
+                        timestamp: Date.now()
+                    }));
+                } catch (error) {
+                    console.error('Cache saving error:', error);
+                }
+            }
+
+            // Rate limiting and retry logic
+            async fetchWithRetry(fetchFn, source, retries = 3) {
+                for (let i = 0; i < retries; i++) {
+                    try {
+                        await this.checkRateLimit(source);
+                        const data = await fetchFn();
+                        this.updateRateLimit(source);
+                        return data;
+                    } catch (error) {
+                        if (i === retries - 1) throw error;
+                        await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+                    }
+                }
+            }
+
+            checkRateLimit(source) {
+                const limit = this.rateLimits[source];
+                const hourAgo = Date.now() - 3600000;
+                
+                if (limit.lastReset < hourAgo) {
+                    limit.requests = 0;
+                    limit.lastReset = Date.now();
+                }
+                
+                if (limit.requests >= 50) { // Adjust limit based on API restrictions
+                    throw new Error(`Rate limit exceeded for ${source}`);
+                }
+            }
+
+            updateRateLimit(source) {
+                this.rateLimits[source].requests++;
             }
 
             async fetchNewsAPI() {
@@ -695,10 +822,27 @@
                     const allArticles = [];
                     
                     for (const query of queries) {
-                        const response = await fetch(`https://newsapi.org/v2/everything?q=${query}&language=en&sortBy=publishedAt&pageSize=10&apiKey=${this.apiKeys.newsapi}`);
+                        const cacheKey = `newsapi-${query}-${this.page}`;
+                        const cached = this.cache.newsapi.get(cacheKey);
+                        
+                        if (cached && Date.now() - cached.timestamp < this.cacheExpiry) {
+                            allArticles.push(...cached.data);
+                            continue;
+                        }
+                        
+                        const response = await fetch(
+                            `https://newsapi.org/v2/everything?q=${query}&language=en&sortBy=publishedAt&page=${this.page}&pageSize=10&apiKey=${this.apiKeys.newsapi}`,
+                            {
+                                headers: {
+                                    'Accept': 'application/json',
+                                    'User-Agent': 'TechFlow News Aggregator'
+                                }
+                            }
+                        );
                         
                         if (!response.ok) {
-                            throw new Error(`NewsAPI error: ${response.status}`);
+                            const error = await response.json();
+                            throw new Error(`NewsAPI error: ${error.message || response.status}`);
                         }
                         
                         const data = await response.json();
