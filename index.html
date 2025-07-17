@@ -285,23 +285,33 @@
             color: #00f5ff;
         }
 
-        .sidebar {
-            position: fixed;
-            right: 20px;
-            top: 50%;
-            transform: translateY(-50%);
+        .trending-dropdown {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 100%;
             width: 300px;
             background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
             border: 1px solid #333;
             border-radius: 15px;
             padding: 25px;
-            z-index: 100;
+            z-index: 1000;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
+            margin-top: 10px;
         }
 
-        .sidebar h3 {
+        .trending-dropdown.active {
+            display: block;
+        }
+
+        .trending-dropdown h3 {
             color: #00f5ff;
             margin-bottom: 20px;
             font-size: 1.2rem;
+        }
+
+        .nav-links li {
+            position: relative;
         }
 
         .trending-item {
@@ -427,11 +437,14 @@
         }
 
         @media (max-width: 1024px) {
-            .sidebar {
-                position: static;
+            .trending-dropdown {
                 width: 100%;
-                margin-top: 30px;
-                transform: none;
+                right: 0;
+                left: 0;
+                border-radius: 0;
+                margin-top: 0;
+                border-top: 1px solid #333;
+                border-bottom: 1px solid #333;
             }
         }
 
@@ -466,7 +479,15 @@
             <ul class="nav-links">
                 <li><a href="#home">Home</a></li>
                 <li><a href="#categories">Categories</a></li>
-                <li><a href="#trending">Trending</a></li>
+                <li>
+                    <a href="#trending" id="trendingLink">Trending</a>
+                    <div class="trending-dropdown" id="trendingDropdown">
+                        <h3>🔥 Trending Now</h3>
+                        <div id="trendingNews">
+                            <!-- Trending items will be populated dynamically -->
+                        </div>
+                    </div>
+                </li>
                 <li><a href="#about">About</a></li>
             </ul>
             <button class="subscribe-btn">Subscribe</button>
@@ -526,13 +547,6 @@
                 <input type="email" class="newsletter-input" placeholder="Enter your email">
                 <button type="submit" class="newsletter-btn">Subscribe</button>
             </form>
-        </div>
-    </div>
-
-    <div class="sidebar">
-        <h3>🔥 Trending Now</h3>
-        <div id="trendingNews">
-            <!-- Trending items will be populated dynamically -->
         </div>
     </div>
 
@@ -606,6 +620,22 @@
                 // Subscribe button
                 document.querySelector('.subscribe-btn').addEventListener('click', () => {
                     this.handleSubscription();
+                });
+
+                // Trending dropdown
+                const trendingLink = document.getElementById('trendingLink');
+                const trendingDropdown = document.getElementById('trendingDropdown');
+                
+                trendingLink.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    trendingDropdown.classList.toggle('active');
+                });
+
+                // Close dropdown when clicking outside
+                document.addEventListener('click', (e) => {
+                    if (!trendingLink.contains(e.target) && !trendingDropdown.contains(e.target)) {
+                        trendingDropdown.classList.remove('active');
+                    }
                 });
             }
 
